@@ -34,12 +34,9 @@ from mediapipe.tasks.python.vision import RunningMode
 #  SETTINGS  (tweak these for your comfort)
 # ──────────────────────────────────────────────
 WEBCAM_INDEX          = 0       # 0 = default webcam
-SWING_VELOCITY_THRESH = 0.10    # Speed needed to START a swing (raise to reduce sensitivity)
-SWING_END_THRESH      = 0.03    # Speed that marks swing END (when arm slows to a stop)
-SWING_ARC_THRESH      = 35      # Min elbow angle change during swing
-MIN_SWING_DURATION    = 0.08    # Swing must last at least this many seconds (avoid jitter)
-MAX_SWING_DURATION    = 2.5     # If swing goes on this long, reset without firing
-COOLDOWN_SECONDS      = 1.5     # Seconds between allowed clicks
+SWING_VELOCITY_THRESH = 0.10    # Speed needed to trigger a swing (raise = less sensitive)
+SWING_ARC_THRESH      = 35      # Min elbow angle change in degrees
+COOLDOWN_SECONDS      = 3.0     # Seconds to wait before next shot
 HISTORY_FRAMES        = 6       # Frames tracked for velocity
 USE_RIGHT_HAND        = True    # True = right arm, False = left arm
 SHOW_DEBUG_INFO       = True    # Show debug panel on screen
@@ -186,30 +183,25 @@ def fire_spacebar():
     return False
 
 # ──────────────────────────────────────────────
+#  SWING DETECTOR
+# ──────────────────────────────────────────────
 #
-#  States:
-#    IDLE     → arm at rest, waiting for a swing to start
-#    SWINGING → wrist is moving fast, swing is in progress
-#
-#  A click fires only when:
-#    1. Wrist speeds up past SWING_VELOCITY_THRESH  (enters SWINGING)
-#    2. Wrist slows back down past SWING_END_THRESH (swing is complete)
-#  This means ONE complete motion = ONE click.
+#  Fires the spacebar IMMEDIATELY when the swing is detected
+#  (as soon as wrist speed + arc cross the thresholds).
+#  Then locks out for COOLDOWN_SECONDS before it can fire again.
+#  This gives ZERO lag — the hit registers the moment you swing.
 
 class SwingDetector:
     STATE_IDLE     = "IDLE"
     STATE_SWINGING = "SWINGING"
 
     def __init__(self):
-        self.wrist_history    = deque(maxlen=HISTORY_FRAMES)
-        self.angle_history    = deque(maxlen=HISTORY_FRAMES)
-        self.last_click_time  = 0
-        self.swing_count      = 0
-        self.swing_flash      = 0
-        self.state            = self.STATE_IDLE
-        self.swing_start_time = 0
-        self.peak_velocity    = 0
-        self.peak_arc         = 0
+        self.wrist_history   = deque(maxlen=HISTORY_FRAMES)
+        self.angle_history   = deque(maxlen=HISTORY_FRAMES)
+        self.last_click_time = 0
+        self.swing_count     = 0
+        self.swing_flash     = 0
+        self.state           = self.STATE_IDLE
 
     @property
     def state_label(self):
@@ -230,34 +222,23 @@ class SwingDetector:
         cooldown_left = max(0, COOLDOWN_SECONDS - (now - self.last_click_time))
         swing_detected = False
 
-        # ── STATE: IDLE → waiting for a swing to begin
         if self.state == self.STATE_IDLE:
+            # ── Fire IMMEDIATELY when swing threshold crossed
             if (velocity    > SWING_VELOCITY_THRESH and
                 angle_delta > SWING_ARC_THRESH      and
                 cooldown_left == 0):
-                self.state            = self.STATE_SWINGING
-                self.swing_start_time = now
-                self.peak_velocity    = velocity
-                self.peak_arc         = angle_delta
-
-        # ── STATE: SWINGING → waiting for swing to finish
-        elif self.state == self.STATE_SWINGING:
-            swing_duration = now - self.swing_start_time
-            self.peak_velocity = max(self.peak_velocity, velocity)
-            self.peak_arc      = max(self.peak_arc, angle_delta)
-
-            # Swing COMPLETE: arm has slowed back down after MIN_SWING_DURATION
-            if velocity < SWING_END_THRESH and swing_duration > MIN_SWING_DURATION:
                 swing_detected       = True
                 self.last_click_time = now
                 self.swing_count    += 1
                 self.swing_flash     = 20
-                self.state           = self.STATE_IDLE
-                print(f"[SHOT #{self.swing_count}]  Peak Speed={self.peak_velocity:.4f}  "
-                      f"Peak Arc={self.peak_arc:.1f}deg  Duration={swing_duration:.2f}s")
+                self.state           = self.STATE_SWINGING
+                print(f"[SHOT #{self.swing_count}]  Speed={velocity:.4f}  "
+                      f"Arc={angle_delta:.1f}deg")
 
-            # Safety reset: swing went on too long (false positive)
-            elif swing_duration > MAX_SWING_DURATION:
+        elif self.state == self.STATE_SWINGING:
+            # ── Stay in SWINGING until arm slows back to near rest
+            # This prevents re-triggering during the follow-through
+            if velocity < SWING_VELOCITY_THRESH * 0.4:
                 self.state = self.STATE_IDLE
 
         if self.swing_flash > 0:
