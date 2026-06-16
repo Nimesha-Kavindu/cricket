@@ -150,16 +150,15 @@ def find_game_window():
 
 def fire_spacebar():
     """
-    Send a SPACEBAR press to City Cricket.
+    Send SPACEBAR to City Cricket using ALL available methods:
 
-    Method 1 (preferred): PostMessage WM_KEYDOWN/WM_KEYUP with VK_SPACE
-      - Sends directly into the game's Win32 message queue
-      - Does NOT require the game window to be in focus
-      - Works with most old Windows games
+    1. Focus the game window (ALT trick + SetForegroundWindow via ctypes)
+    2. PostMessage WM_KEYDOWN  → works for WM-based / old Windows games
+    3. pydirectinput.press()   → uses SendInput, works for DirectInput games
+                                 (requires game to be in focus — step 1 handles this)
 
-    Method 2 (fallback): pydirectinput.press('space')
-      - Uses SendInput (hardware-level)
-      - Requires game to be focused — used if window not found
+    Using all three methods ensures the key reaches the game regardless of
+    whether it uses Win32 messages, DirectInput, or GetAsyncKeyState.
     """
     global _game_hwnd
 
@@ -168,19 +167,43 @@ def fire_spacebar():
         _game_hwnd = find_game_window()
 
     if _game_hwnd:
+        # ── Step 1: Focus the game window
         try:
-            # Send SPACE key directly into game's message queue (no focus needed!)
+            win32gui.ShowWindow(_game_hwnd, win32con.SW_RESTORE)
+        except Exception:
+            pass
+
+        try:
+            # ALT key trick: briefly press ALT so Windows allows focus steal
+            win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+            win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+            # Use raw ctypes call — avoids Python exception on error
+            ctypes.windll.user32.AllowSetForegroundWindow(-1)
+            ctypes.windll.user32.SetForegroundWindow(_game_hwnd)
+        except Exception:
+            pass
+
+        time.sleep(0.06)   # let the game receive focus
+
+        # ── Step 2: PostMessage (for WM-based / old Windows games)
+        try:
             win32api.PostMessage(_game_hwnd, win32con.WM_KEYDOWN, win32con.VK_SPACE, 0)
             time.sleep(0.05)
             win32api.PostMessage(_game_hwnd, win32con.WM_KEYUP,   win32con.VK_SPACE, 0)
-            return True
         except Exception as e:
-            print(f"[WARN] PostMessage failed ({e}) -- using pydirectinput fallback")
+            print(f"[WARN] PostMessage failed: {e}")
 
-    # Fallback: hardware-level spacebar (game must be focused)
-    print("[WARN] Game window not found! Press W to list all open windows.")
-    pydirectinput.press('space')
-    return False
+    else:
+        print("[WARN] Game window not found! Open City Cricket, then press W to list windows.")
+
+    # ── Step 3: pydirectinput SendInput (for DirectInput / GetAsyncKeyState games)
+    # This fires to whatever window is currently in focus (hopefully the game)
+    try:
+        pydirectinput.press('space')
+    except Exception as e:
+        print(f"[WARN] pydirectinput failed: {e}")
+
+    return _game_hwnd is not None
 
 # ──────────────────────────────────────────────
 #  SWING DETECTOR
