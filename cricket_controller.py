@@ -18,6 +18,12 @@ import time
 import os
 import urllib.request
 from collections import deque
+import win32gui
+import win32con
+import win32api
+import win32process
+import pydirectinput
+import ctypes
 
 import mediapipe as mp
 from mediapipe.tasks import python as mp_python
@@ -112,7 +118,73 @@ def draw_info_panel(frame, velocity, elbow_angle, angle_delta, cooldown_left, sw
 
 
 # ──────────────────────────────────────────────
-#  SWING DETECTOR  (State Machine)
+#  GAME WINDOW CLICK HELPER
+# ──────────────────────────────────────────────
+
+# Keywords to search for in the game window title
+GAME_WINDOW_KEYWORDS = ["city cricket", "cricket", "city"]
+
+_game_hwnd = None   # cached window handle
+
+
+def list_all_windows():
+    """Print all visible window titles — use this to find City Cricket's title."""
+    print("\n[DEBUG] Visible windows:")
+    def _enum(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd):
+            title = win32gui.GetWindowText(hwnd)
+            if title.strip():
+                print(f"  > {title}")
+    win32gui.EnumWindows(_enum, None)
+    print()
+
+
+def find_game_window():
+    """Find the City Cricket game window handle by title keyword."""
+    found = []
+    def _enum(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd):
+            title = win32gui.GetWindowText(hwnd).lower()
+            if any(kw in title for kw in GAME_WINDOW_KEYWORDS):
+                found.append(hwnd)
+    win32gui.EnumWindows(_enum, None)
+    return found[0] if found else None
+
+
+def fire_spacebar():
+    """
+    Send a SPACEBAR press to City Cricket.
+
+    Method 1 (preferred): PostMessage WM_KEYDOWN/WM_KEYUP with VK_SPACE
+      - Sends directly into the game's Win32 message queue
+      - Does NOT require the game window to be in focus
+      - Works with most old Windows games
+
+    Method 2 (fallback): pydirectinput.press('space')
+      - Uses SendInput (hardware-level)
+      - Requires game to be focused — used if window not found
+    """
+    global _game_hwnd
+
+    # Refresh handle if stale
+    if not _game_hwnd or not win32gui.IsWindow(_game_hwnd):
+        _game_hwnd = find_game_window()
+
+    if _game_hwnd:
+        try:
+            # Send SPACE key directly into game's message queue (no focus needed!)
+            win32api.PostMessage(_game_hwnd, win32con.WM_KEYDOWN, win32con.VK_SPACE, 0)
+            time.sleep(0.05)
+            win32api.PostMessage(_game_hwnd, win32con.WM_KEYUP,   win32con.VK_SPACE, 0)
+            return True
+        except Exception as e:
+            print(f"[WARN] PostMessage failed ({e}) -- using pydirectinput fallback")
+
+    # Fallback: hardware-level spacebar (game must be focused)
+    print("[WARN] Game window not found! Press W to list all open windows.")
+    pydirectinput.press('space')
+    return False
+
 # ──────────────────────────────────────────────
 #
 #  States:
@@ -321,10 +393,9 @@ def main():
 
             # ── Fire click if swing detected
             if swing_fired:
-                if CLICK_AT_CENTER:
-                    pyautogui.click(click_x, click_y, button='right')
-                else:
-                    pyautogui.click(button='right')
+                success = fire_spacebar()
+                if not success:
+                    print("[WARN] City Cricket window not found! Press W to list all open windows.")
 
 
             # ── Flash overlay on swing
@@ -358,7 +429,7 @@ def main():
             # ── Top bar
             cv2.rectangle(frame, (0,0), (w, 38), (15,15,15), -1)
             cv2.putText(frame,
-                        "City Cricket Controller  |  Q=Quit  S=Debug  C=Test Click"
+                        "Cricket Controller  |  Q=Quit  S=Debug  C=Test Click  W=List Windows"
                         f"  |  Threshold: {SWING_VELOCITY_THRESH}",
                         (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180,180,180), 1)
 
@@ -371,8 +442,12 @@ def main():
             elif key == ord('s'):
                 show_debug = not show_debug
             elif key == ord('c'):
-                pyautogui.click(click_x, click_y, button='right')
-                print(f"[TEST] Manual right-click at ({click_x}, {click_y})")
+                success = fire_spacebar()
+                status_msg = "OK (spacebar sent)" if success else "FALLBACK (game not found)"
+                print(f"[TEST] Manual spacebar fired  [{status_msg}]")
+            elif key == ord('w'):
+                list_all_windows()
+                print("       --> Add the game title keyword to GAME_WINDOW_KEYWORDS in the script")
 
     cap.release()
     cv2.destroyAllWindows()
