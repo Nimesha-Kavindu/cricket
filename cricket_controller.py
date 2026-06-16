@@ -38,6 +38,7 @@ SWING_VELOCITY_THRESH = 0.10    # Speed needed to trigger a swing (raise = less 
 SWING_ARC_THRESH      = 35      # Min elbow angle change in degrees
 COOLDOWN_SECONDS      = 3.0     # Seconds to wait before next shot
 HISTORY_FRAMES        = 6       # Frames tracked for velocity
+WINDOW_SCALE          = 0.5     # Display window size (0.5 = half, 0.4 = smaller, 1.0 = full)
 USE_RIGHT_HAND        = True    # True = right arm, False = left arm
 SHOW_DEBUG_INFO       = True    # Show debug panel on screen
 CLICK_AT_CENTER       = True    # Click screen center (where ball is in City Cricket)
@@ -322,6 +323,10 @@ def main():
     show_debug = SHOW_DEBUG_INFO
     frame_idx  = 0
 
+    # ── Create a resizable display window
+    WIN_NAME = "City Cricket - Gesture Controller"
+    cv2.namedWindow(WIN_NAME, cv2.WINDOW_NORMAL)
+
     with mp_vision.HolisticLandmarker.create_from_options(options) as landmarker:
         while cap.isOpened():
             ret, frame = cap.read()
@@ -437,7 +442,15 @@ def main():
                         f"  |  Threshold: {SWING_VELOCITY_THRESH}",
                         (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180,180,180), 1)
 
-            cv2.imshow("City Cricket - Gesture Controller", frame)
+            # ── Resize frame for display (does not affect tracking accuracy)
+            if WINDOW_SCALE != 1.0:
+                dw = int(w * WINDOW_SCALE)
+                dh = int(h * WINDOW_SCALE)
+                display_frame = cv2.resize(frame, (dw, dh))
+            else:
+                display_frame = frame
+
+            cv2.imshow(WIN_NAME, display_frame)
 
             key = cv2.waitKey(1) & 0xFF
             if key in (ord('q'), 27):
